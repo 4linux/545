@@ -16,8 +16,8 @@
 
     - name: Clona repositório com os arquivos do curso para a HOME do usuario suporte
       git:
-        repo: 'https://github.com/4linux/4541.git'
-        dest: /home/suporte/4541
+        repo: 'https://github.com/4linux/545.git'
+        dest: /home/suporte/545
         
     - name: Adiciona usuario devops
       user:
@@ -27,8 +27,8 @@
         
     - name: Clona repositório com os arquivos do curso para a HOME do usuario devops
       git:
-        repo: 'https://github.com/4linux/4541.git'
-        dest: /home/devops/4541
+        repo: 'https://github.com/4linux/545.git'
+        dest: /home/devops/545
 
     - name: Cria o diretorio auth para o usuario suporte
       file:
