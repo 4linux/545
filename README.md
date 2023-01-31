@@ -1,4 +1,4 @@
-Laboratório 4541 - Kubernetes: Segurança em Cluster Kubernetes - CKS
+Laboratório 545 - Kubernetes: Segurança em Cluster Kubernetes - CKS
 =============================
 
 Repositório para armazenar o Laboratório do curso de Segurança em Cluster Kubernetes - CKS da [4Linux][1]
