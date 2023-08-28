@@ -43,6 +43,29 @@
         group: suporte
         mode: 0644
    
+    - name: Adiciona uma chave de assinatura apt para o Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Adiciona repositorio apt para versao estavel
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable
+        state: present
+
+    - name: Instala o Docker e suas dependencias
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+      notify:
+        - docker status
+
     - name: Adiciona o usuario suporte no grupo docker
       user:
         name: suporte
@@ -85,6 +108,17 @@
       command: swapoff -a
       when: ansible_swaptotal_mb > 0
 
+    - name: Adiciona uma chave de assinatura apt para o Kubernetes
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Adiciona repositorio apt para Kubernetes
+      apt_repository:
+        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: kubernetes.list
+
     - name: Instala os pacotes do Kubernetes
       apt:
         name: "{{ packages }}"
@@ -107,3 +141,7 @@
 
     - name: Adiciona o node no cluster
       command: sh /tmp/join-command.sh
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started
