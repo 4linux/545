@@ -55,6 +55,7 @@
         - docker-ce
         - docker-ce-cli
         - containerd.io
+        - nfs-common
       notify:
         - docker status
 
