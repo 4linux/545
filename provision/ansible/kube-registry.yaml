@@ -173,7 +173,30 @@
       systemd:
         state: restarted
         name: bind9
-  
+
+    - name: Adiciona uma chave de assinatura apt para o Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Adiciona repositorio apt para versao estavel
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable
+        state: present
+
+    - name: Instala o Docker e suas dependencias
+      apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+      vars:
+        packages:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+      notify:
+        - docker status
+
     - name: Adiciona o usuario suporte no grupo docker
       user:
         name: suporte
@@ -211,3 +234,7 @@
 
     - name: Inicia o Docker Registry atraves do Docker Compose
       command: docker-compose -f /home/suporte/docker-compose.yaml up -d
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started
