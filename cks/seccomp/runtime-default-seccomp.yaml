@@ -15,4 +15,4 @@ spec:
     args: [ "amicontained" ]
     securityContext:
       allowPrivilegeEscalation: false    
-  nodeName: kube-node2
+  nodeName: kube-node1

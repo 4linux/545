@@ -16,4 +16,4 @@ spec:
     args: [ "touch test; chmod +x test; while true; do sleep 30; done;" ]
     securityContext:
       allowPrivilegeEscalation: false
-  nodeName: kube-node2
+  nodeName: kube-node1

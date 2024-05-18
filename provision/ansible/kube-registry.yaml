@@ -19,16 +19,23 @@
         repo: 'https://github.com/4linux/545.git'
         dest: /home/suporte/545
         
-    - name: Adiciona usuario devops
+    - name: Adiciona usuario analista
       user:
-        name: devops
+        name: analista
         shell: /bin/bash
         password : $1$QbUARykG$p2nthVG8AkDvabKPHwboa1
         
-    - name: Clona repositório com os arquivos do curso para a HOME do usuario devops
+    - name: Garantir permissão de superusuario para o usuario analista
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        insertafter: "suporte ALL=(ALL) NOPASSWD: ALL"
+        line: "analista ALL=(ALL) NOPASSWD: ALL"
+
+    - name: Clona repositório com os arquivos do curso para a HOME do usuario analista
       git:
         repo: 'https://github.com/4linux/545.git'
-        dest: /home/devops/545
+        dest: /home/analista/545
 
     - name: Cria o diretorio auth para o usuario suporte
       file:
@@ -89,18 +96,18 @@
         
     - name: Cria o diretório .ssh
       file:
-        path: /home/devops/.ssh
+        path: /home/analista/.ssh
         state: directory
-        owner: devops
-        group: devops
+        owner: analista
+        group: analista
         mode: '0755'
         
     - name: Criando o arquivo authorized_keys
       copy:
         src: files/authorized_keys
-        dest: /home/devops/.ssh/authorized_keys
-        owner: devops
-        group: devops
+        dest: /home/analista/.ssh/authorized_keys
+        owner: analista
+        group: analista
         mode: 0644
 
     - name: Criando diretório /opt/data
