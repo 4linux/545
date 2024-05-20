@@ -16,4 +16,4 @@ spec:
     args: [ "ls /; while true; do sleep 30; done;" ]
     securityContext:
       allowPrivilegeEscalation: false    
-  nodeName: kube-node1
+  nodeName: kube-node2

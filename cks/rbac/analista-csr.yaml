@@ -2,9 +2,11 @@
 apiVersion: certificates.k8s.io/v1
 kind: CertificateSigningRequest
 metadata:
-  name: analista
+  name: analista-csr
 spec:
-  request: 
+  groups:
+  - system:authenticated
+  request: REQUEST
   signerName: kubernetes.io/kube-apiserver-client
   usages:
   - client auth
