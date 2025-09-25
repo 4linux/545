@@ -481,9 +481,8 @@ kind: Ingress
 metadata:
   name: ingress-frontend
   namespace: 4labs
-  annotations:
-    kubernetes.io/ingress.class: nginx
 spec:
+  ingressClassName: nginx
   rules:
   - host: frontend.4labs.example
     http:
