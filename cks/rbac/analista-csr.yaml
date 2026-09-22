@@ -4,8 +4,6 @@ kind: CertificateSigningRequest
 metadata:
   name: analista-csr
 spec:
-  groups:
-  - system:authenticated
   request: REQUEST
   signerName: kubernetes.io/kube-apiserver-client
   usages:
