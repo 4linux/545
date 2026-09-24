@@ -1,0 +1,35 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webserver
+  namespace: supply-chain
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/webserver: runtime/default
+    container.seccomp.security.alpha.kubernetes.io/pod: runtime/default
+spec:
+  serviceAccountName: webserver
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: webserver
+    image: registry:5000/app-golang:v1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    securityContext:
+      privileged: false
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL

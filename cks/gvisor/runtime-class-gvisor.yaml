@@ -4,3 +4,6 @@ kind: RuntimeClass
 metadata:
   name: gvisor
 handler: runsc
+scheduling:
+  nodeSelector:
+    sandbox.4linux/gvisor: "true"

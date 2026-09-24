@@ -3,213 +3,409 @@
   become: yes
   become_user: root
   become_method: sudo
+
   tasks:
+
+    # -------------------------------------------------------------------------
+    # Configuração básica
+    # -------------------------------------------------------------------------
+
     - name: Garantindo /etc/hosts
       lineinfile:
         path: /etc/hosts
         line: "{{ item }}"
+        state: present
       with_items:
-        - 172.16.1.100 kube-master
-        - 172.16.1.101 kube-node1
-        - 172.16.1.102 kube-node2
-        - 172.16.1.103 registry
+        - "172.16.1.100 kube-master"
+        - "172.16.1.101 kube-node1"
+        - "172.16.1.102 kube-node2"
+        - "172.16.1.103 kube-registry registry"
 
-    - name: Clona repositório com os arquivos do curso para a HOME do usuario suporte
-      git:
-        repo: 'https://github.com/4linux/545.git'
+    # -------------------------------------------------------------------------
+    # Atualizacoes automaticas
+    # -------------------------------------------------------------------------
+
+    - name: Desabilita atualizacoes automaticas do APT
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+
+    - name: Interrompe servicos automaticos do APT caso estejam ativos
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - apt-daily.service
+        - apt-daily-upgrade.service
+      failed_when: false
+
+    - name: Desabilita timers automaticos do APT
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+        state: stopped
+        masked: yes
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    - name: Verifica configuracao de atualizacoes automaticas
+      command: apt-config dump
+      register: apt_periodic_config
+      changed_when: false
+      failed_when: >
+        'APT::Periodic::Unattended-Upgrade "0"' not in
+        apt_periodic_config.stdout or
+        'APT::Periodic::Update-Package-Lists "0"' not in
+        apt_periodic_config.stdout
+
+    - name: Instala pacotes basicos
+      apt:
+        name:
+          - acl
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - vim
+          - nfs-kernel-server
+          - bind9
+          - jq
+        state: present
+        update_cache: yes
+
+    # -------------------------------------------------------------------------
+    # Usuário suporte
+    # -------------------------------------------------------------------------
+
+    - name: Adiciona usuario suporte
+      user:
+        name: suporte
+        shell: /bin/bash
+        create_home: yes
+        password: '$1$QbUARykG$p2nthVG8AkDvabKPHwboa1'
+
+    - name: Configura sudo sem senha para usuario suporte
+      copy:
+        dest: /etc/sudoers.d/suporte
+        owner: root
+        group: root
+        mode: '0440'
+        content: |
+          suporte ALL=(ALL) NOPASSWD:ALL
+        validate: '/usr/sbin/visudo -cf %s'
+
+    - name: Cria diretorio .ssh para usuario suporte
+      file:
+        path: /home/suporte/.ssh
+        state: directory
+        owner: suporte
+        group: suporte
+        mode: '0700'
+
+    - name: Criando authorized_keys para usuario suporte
+      copy:
+        src: files/authorized_keys
+        dest: /home/suporte/.ssh/authorized_keys
+        owner: suporte
+        group: suporte
+        mode: '0600'
+
+    - name: Disponibiliza arquivos do curso atraves do diretorio compartilhado
+      file:
+        src: /vagrant
         dest: /home/suporte/545
-        
+        state: link
+        owner: suporte
+        group: suporte
+        force: yes
+
+    # -------------------------------------------------------------------------
+    # Usuário analista
+    # -------------------------------------------------------------------------
+
     - name: Adiciona usuario analista
       user:
         name: analista
         shell: /bin/bash
-        password : $1$QbUARykG$p2nthVG8AkDvabKPHwboa1
-        
-    - name: Garantir permissão de superusuario para o usuario analista
-      lineinfile:
-        path: /etc/sudoers
-        state: present
-        insertafter: "suporte ALL=(ALL) NOPASSWD: ALL"
-        line: "analista ALL=(ALL) NOPASSWD: ALL"
+        create_home: yes
+        groups:
+          - sudo
+        append: yes
+        password: '$6$4linuxcks$w.MzcXD3GvoIfPDzI65zE.DKwQFjIB7XV.Uqj.yUDVFeOtT6QG59nZCUaHoiA/3zWb//GQcyA5bBCEYyvcYVU/'
+        update_password: always
 
-    - name: Clona repositório com os arquivos do curso para a HOME do usuario analista
-      git:
-        repo: 'https://github.com/4linux/545.git'
-        dest: /home/analista/545
-
-    - name: Cria o diretorio auth para o usuario suporte
-      file:
-        path: /home/suporte/auth
-        state: directory
-        mode: '0775'
-
-    - name: Cria o diretorio certs para o usuario suporte
-      file:
-        path: /home/suporte/certs
-        state: directory
-        mode: '0775'
-
-    - name: Criando o arquivo htpasswd
+    - name: Configura sudo sem senha para usuario analista
       copy:
-        src: files/htpasswd
-        dest: /home/suporte/auth
-        mode: 0664
+        dest: /etc/sudoers.d/analista
+        owner: root
+        group: root
+        mode: '0440'
+        content: |
+          analista ALL=(ALL) NOPASSWD:ALL
+        validate: '/usr/sbin/visudo -cf %s'
 
-    - name: Criando o arquivo registry.crt
+    - name: Habilita autenticacao SSH por senha
       copy:
-        src: files/registry.crt
-        dest: /home/suporte/certs
-        mode: 0664
+        dest: /etc/ssh/sshd_config.d/00-4linux-password-auth.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          PasswordAuthentication yes
+      notify:
+        - Reinicia ssh
 
-    - name: Criando o arquivo registry.key
-      copy:
-        src: files/registry.key
-        dest: /home/suporte/certs
-        mode: 0664
+    - name: Valida configuracao do SSH
+      command: /usr/sbin/sshd -t
+      changed_when: false
 
-    - name: Criando o arquivo docker-compose.yaml
-      copy:
-        src: files/docker-compose.yaml
-        dest: /home/suporte
-        mode: 0644
+    - name: Confirma autenticacao SSH por senha
+      command: /usr/sbin/sshd -T
+      register: sshd_effective_config
+      changed_when: false
+      failed_when: >
+        'passwordauthentication yes' not in sshd_effective_config.stdout_lines
 
-    - name: Definir permissao de acesso da HOME do usuario suporte
-      file:
-        path: /home/suporte
-        owner: suporte 
-        group: suporte 
-        state: directory
-        recurse: yes
-
-    - name: Criando diretório data
-      synchronize:
-        src: files/data
-        dest: /home/suporte
-
-    - name: Definir permissao de acesso do diretório data
-      file:
-        path: /home/suporte/data
-        owner: root 
-        group: root 
-        state: directory
-        recurse: yes
-        
-    - name: Cria o diretório .ssh
+    - name: Cria diretorio .ssh para usuario analista
       file:
         path: /home/analista/.ssh
         state: directory
         owner: analista
         group: analista
-        mode: '0755'
-        
-    - name: Criando o arquivo authorized_keys
+        mode: '0700'
+
+    - name: Criando authorized_keys para usuario analista
       copy:
         src: files/authorized_keys
         dest: /home/analista/.ssh/authorized_keys
         owner: analista
         group: analista
-        mode: 0644
+        mode: '0600'
 
-    - name: Criando diretório /opt/data
+    - name: Disponibiliza arquivos do curso para usuario analista
+      file:
+        src: /vagrant
+        dest: /home/analista/545
+        state: link
+        owner: analista
+        group: analista
+        force: yes
+
+    # -------------------------------------------------------------------------
+    # Registry
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio auth
+      file:
+        path: /home/suporte/auth
+        state: directory
+        owner: suporte
+        group: suporte
+        mode: '0750'
+
+    - name: Cria diretorio certs
+      file:
+        path: /home/suporte/certs
+        state: directory
+        owner: suporte
+        group: suporte
+        mode: '0750'
+
+    - name: Criando arquivo htpasswd
+      copy:
+        src: files/htpasswd
+        dest: /home/suporte/auth/htpasswd
+        owner: suporte
+        group: suporte
+        mode: '0640'
+
+    - name: Criando registry.crt
+      copy:
+        src: files/registry.crt
+        dest: /home/suporte/certs/registry.crt
+        owner: suporte
+        group: suporte
+        mode: '0644'
+
+    - name: Criando registry.key
+      copy:
+        src: files/registry.key
+        dest: /home/suporte/certs/registry.key
+        owner: suporte
+        group: suporte
+        mode: '0600'
+
+    - name: Criando docker-compose.yaml
+      copy:
+        src: files/docker-compose.yaml
+        dest: /home/suporte/docker-compose.yaml
+        owner: suporte
+        group: suporte
+        mode: '0644'
+
+    # -------------------------------------------------------------------------
+    # Dados
+    # -------------------------------------------------------------------------
+
+    - name: Copia diretorio data
+      copy:
+        src: files/data/
+        dest: /home/suporte/data/
+
+    - name: Define permissao do diretorio data
+      file:
+        path: /home/suporte/data
+        owner: root
+        group: root
+        state: directory
+        recurse: yes
+
+    # -------------------------------------------------------------------------
+    # NFS
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio /opt/data
       file:
         path: /opt/data
         state: directory
+        owner: root
+        group: root
         mode: '0775'
 
-    - name: Criando diretório /opt/app
-      synchronize:
-        src: files/app
-        dest: /opt
+    - name: Copia diretorio app
+      copy:
+        src: files/app/
+        dest: /opt/app/
 
-    - name: Instalando o NFS e DNS Server
-      apt:
-        name: "{{ packages }}"
-        state: present
-        update_cache: yes
-      vars:
-        packages:
-        - nfs-kernel-server
-        - bind9
+    - name: Define permissao do diretorio /opt/app
+      file:
+        path: /opt/app
+        state: directory
+        owner: root
+        group: root
+        recurse: yes
 
-    - name: Criando o arquivo exports
-      lineinfile:
+    - name: Configura exports do NFS
+      blockinfile:
         path: /etc/exports
-        line: "{{ item }}"
-      with_items:
-        - /opt/data 172.16.1.0/24(rw,no_root_squash,no_subtree_check)
-        - /opt/app 172.16.1.0/24(rw,no_root_squash,no_subtree_check)
+        marker: "# {mark} 4LINUX CKS LAB"
+        block: |
+          /opt/data 172.16.1.0/24(rw,no_root_squash,no_subtree_check)
+          /opt/app 172.16.1.0/24(rw,no_root_squash,no_subtree_check)
+      notify:
+        - Reinicia NFS
 
-    - name: Reinicia o service do nfs-kernel-server
-      systemd:
-        state: restarted
-        name: nfs-kernel-server
+    - name: Aplica configuracao NFS
+      meta: flush_handlers
 
-    - name: Criando o arquivo named.conf.local
+    # -------------------------------------------------------------------------
+    # DNS
+    # -------------------------------------------------------------------------
+
+    - name: Criando named.conf.local
       copy:
         src: files/named.conf.local
-        dest: /etc/bind
+        dest: /etc/bind/named.conf.local
         owner: root
         group: bind
-        mode: 0644
+        mode: '0644'
+      notify:
+        - Reinicia Bind9
 
-    - name: Criando o arquivo named.conf.options
+    - name: Criando named.conf.options
       copy:
         src: files/named.conf.options
-        dest: /etc/bind
+        dest: /etc/bind/named.conf.options
         owner: root
         group: bind
-        mode: 0644
+        mode: '0644'
+      notify:
+        - Reinicia Bind9
 
-    - name: Criando o arquivo 4labs.example
+    - name: Criando arquivo 4labs.example
       copy:
         src: files/4labs.example
-        dest: /etc/bind
+        dest: /etc/bind/4labs.example
         owner: root
         group: bind
-        mode: 0644
+        mode: '0644'
+      notify:
+        - Reinicia Bind9
 
-    - name: Criando o arquivo 1.16.172.db
+    - name: Criando arquivo 1.16.172.db
       copy:
         src: files/1.16.172.db
-        dest: /etc/bind
+        dest: /etc/bind/1.16.172.db
         owner: root
         group: bind
-        mode: 0644
+        mode: '0644'
+      notify:
+        - Reinicia Bind9
 
-    - name: Reinicia o service do bind9
-      systemd:
-        state: restarted
-        name: bind9
+    - name: Aplica configuracao Bind9
+      meta: flush_handlers
 
-    - name: Adiciona uma chave de assinatura apt para o Docker
-      apt_key:
+    # -------------------------------------------------------------------------
+    # Docker
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio de chaves APT
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Baixa chave GPG do repositorio Docker
+      get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: '0644'
 
-    - name: Adiciona repositorio apt para versao estavel
+    - name: Adiciona repositorio oficial Docker
       apt_repository:
-        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable
-        state: present
-
-    - name: Instala o Docker e suas dependencias
-      apt:
-        name: "{{ packages }}"
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
         state: present
         update_cache: yes
-      vars:
-        packages:
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-      notify:
-        - docker status
 
-    - name: Adiciona o usuario suporte no grupo docker
+    - name: Instala Docker Engine e Docker Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Habilita e inicia Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Adiciona usuario suporte ao grupo docker
       user:
         name: suporte
-        group: docker
+        groups: docker
+        append: yes
 
-    - name: Cria o diretorio registry:5000
+    # -------------------------------------------------------------------------
+    # Certificado do Registry
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio de certificados do Registry
       file:
         path: /etc/docker/certs.d/registry:5000
         state: directory
@@ -217,31 +413,98 @@
         group: root
         mode: '0755'
 
-    - name: Criando o arquivo ca.crt
+    - name: Instala certificado CA do Registry
       copy:
         src: files/ca.crt
-        dest: /etc/docker/certs.d/registry:5000
-        owner: suporte
-        group: suporte
-        mode: '0644'
-   
-    - name: Criando o arquivo daemon.json
-      copy:
-        src: files/daemon.json
-        dest: /etc/docker/
+        dest: /etc/docker/certs.d/registry:5000/ca.crt
         owner: root
         group: root
         mode: '0644'
-   
-    - name: Instala o docker-compose
-      get_url:
-        url: https://github.com/docker/compose/releases/download/1.25.5/docker-compose-linux-x86_64
-        dest: /usr/local/bin/docker-compose
+      notify:
+        - Reinicia Docker
+
+    # -------------------------------------------------------------------------
+    # daemon.json
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio /etc/docker
+      file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
         mode: '0755'
 
-    - name: Inicia o Docker Registry atraves do Docker Compose
-      command: docker-compose -f /home/suporte/docker-compose.yaml up -d
+    - name: Criando arquivo daemon.json
+      copy:
+        src: files/daemon.json
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Reinicia Docker
+
+    - name: Aplica configuracoes Docker
+      meta: flush_handlers
+
+    # -------------------------------------------------------------------------
+    # Docker Compose / Registry
+    # -------------------------------------------------------------------------
+
+    - name: Verifica versao do Docker Compose
+      command: docker compose version
+      changed_when: false
+
+    - name: Inicia Docker Registry
+      command:
+        cmd: docker compose -f /home/suporte/docker-compose.yaml up -d
+        chdir: /home/suporte
+
+    # -------------------------------------------------------------------------
+    # Serviços
+    # -------------------------------------------------------------------------
+
+    - name: Garante que NFS esta habilitado
+      service:
+        name: nfs-kernel-server
+        state: started
+        enabled: yes
+
+    - name: Garante que Bind9 esta habilitado
+      service:
+        name: bind9
+        state: started
+        enabled: yes
+
+    - name: Garante que Docker esta habilitado
+      service:
+        name: docker
+        state: started
+        enabled: yes
 
   handlers:
-    - name: docker status
-      service: name=docker state=started
+
+    - name: Reinicia ssh
+      service:
+        name: ssh
+        state: restarted
+        enabled: yes
+
+    - name: Reinicia NFS
+      service:
+        name: nfs-kernel-server
+        state: restarted
+        enabled: yes
+
+    - name: Reinicia Bind9
+      service:
+        name: bind9
+        state: restarted
+        enabled: yes
+
+    - name: Reinicia Docker
+      service:
+        name: docker
+        state: restarted
+        enabled: yes

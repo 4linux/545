@@ -1,0 +1,10 @@
+#include <tunables/global>
+
+profile k8s-apparmor-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  file,
+
+  # Bloqueia e registra tentativas de escrita em qualquer arquivo.
+  audit deny /** w,
+}

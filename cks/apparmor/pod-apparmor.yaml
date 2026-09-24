@@ -2,13 +2,18 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  annotations:
-    container.apparmor.security.beta.kubernetes.io/pod-apparmor: localhost/docker-nginx
-  labels:
-    run: pod-apparmor
   name: pod-apparmor
 spec:
+  nodeSelector:
+    security.4linux/apparmor: deny-write
+  securityContext:
+    appArmorProfile:
+      type: Localhost
+      localhostProfile: k8s-apparmor-deny-write
   containers:
-  - image: nginx
-    name: pod-apparmor
-  nodeName: kube-node1
+  - name: app
+    image: busybox:1.36.1
+    command:
+    - sh
+    - -c
+    - sleep 86400

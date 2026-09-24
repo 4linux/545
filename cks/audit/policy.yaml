@@ -1,0 +1,35 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+
+omitStages:
+- RequestReceived
+
+omitManagedFields: true
+
+rules:
+
+# Registra kubectl exec com o corpo da requisição.
+- level: Request
+  verbs:
+  - create
+  resources:
+  - group: ""
+    resources:
+    - pods/exec
+
+# Para Secrets registramos somente metadados.
+- level: Metadata
+  resources:
+  - group: ""
+    resources:
+    - secrets
+
+# Evita ruído dos endpoints de saúde.
+- level: None
+  nonResourceURLs:
+  - /healthz*
+  - /readyz*
+  - /livez*
+
+# Demais requisições são registradas como Metadata.
+- level: Metadata

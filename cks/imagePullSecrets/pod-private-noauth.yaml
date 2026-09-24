@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-private-noauth
+  namespace: supply-chain
+spec:
+  containers:
+  - name: app
+    image: registry:5000/app-golang:v1

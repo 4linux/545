@@ -1,0 +1,21 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-seccomp-custom
+spec:
+  nodeSelector:
+    security.4linux/seccomp: custom
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/deny-chmod.json
+  containers:
+  - name: app
+    image: ubuntu:24.04
+    command:
+    - /bin/bash
+    - -c
+    - sleep infinity
+    securityContext:
+      allowPrivilegeEscalation: false

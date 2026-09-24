@@ -1,0 +1,9 @@
+FROM golang:1.26
+
+WORKDIR /src
+
+COPY app.go .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o app app.go
+
+CMD ["/src/app"]

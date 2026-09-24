@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: runtime-test
+  namespace: default
+spec:
+  nodeName: kube-node2
+  containers:
+  - name: runtime-test
+    image: ubuntu:24.04
+    command:
+    - /bin/bash
+    - -c
+    - sleep infinity

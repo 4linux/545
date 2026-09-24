@@ -3,46 +3,162 @@
   become: yes
   become_user: root
   become_method: sudo
+
+  vars:
+    kubernetes_minor: "v1.34"
+    kubernetes_version: "1.34.3-1.1"
+    crictl_version: "v1.34.0"
+    calico_version: "v3.32.2"
+    metallb_chart_version: "0.13.11"
+    nginx_ingress_chart_version: "2.7.3"
+    node_ip: "172.16.1.100"
+
   tasks:
+
+    # -------------------------------------------------------------------------
+    # Configuração básica
+    # -------------------------------------------------------------------------
+
     - name: Garantindo /etc/hosts
       lineinfile:
         path: /etc/hosts
         line: "{{ item }}"
+        state: present
       with_items:
-        - 172.16.1.100 kube-master
-        - 172.16.1.101 kube-node1
-        - 172.16.1.102 kube-node2
-        - 172.16.1.103 kube-registry registry
+        - "172.16.1.100 kube-master"
+        - "172.16.1.101 kube-node1"
+        - "172.16.1.102 kube-node2"
+        - "172.16.1.103 kube-registry registry"
+
+    # -------------------------------------------------------------------------
+    # Atualizacoes automaticas
+    # -------------------------------------------------------------------------
+
+    - name: Desabilita atualizacoes automaticas do APT
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+
+    - name: Interrompe servicos automaticos do APT caso estejam ativos
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - apt-daily.service
+        - apt-daily-upgrade.service
+      failed_when: false
+
+    - name: Desabilita timers automaticos do APT
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+        state: stopped
+        masked: yes
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    - name: Verifica configuracao de atualizacoes automaticas
+      command: apt-config dump
+      register: apt_periodic_config
+      changed_when: false
+      failed_when: >
+        'APT::Periodic::Unattended-Upgrade "0"' not in
+        apt_periodic_config.stdout or
+        'APT::Periodic::Update-Package-Lists "0"' not in
+        apt_periodic_config.stdout
+
+    # O pacote acl precisa existir antes de utilizar become_user
+    - name: Instala pacotes basicos para o provisionamento
+      apt:
+        name:
+          - acl
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - vim
+        state: present
+        update_cache: yes
+
+    # -------------------------------------------------------------------------
+    # Usuário suporte
+    # -------------------------------------------------------------------------
 
     - name: Adiciona usuario suporte
       user:
         name: suporte
         shell: /bin/bash
-        password : $1$QbUARykG$p2nthVG8AkDvabKPHwboa1
+        create_home: yes
+        groups:
+          - sudo
+        append: yes
+        password: '$6$4linuxcks$w.MzcXD3GvoIfPDzI65zE.DKwQFjIB7XV.Uqj.yUDVFeOtT6QG59nZCUaHoiA/3zWb//GQcyA5bBCEYyvcYVU/'
+        update_password: always
 
-    - name: Cria o diretório .ssh
+    - name: Concede sudo sem senha ao usuario suporte
+      copy:
+        dest: /etc/sudoers.d/suporte
+        owner: root
+        group: root
+        mode: '0440'
+        content: |
+          suporte ALL=(ALL) NOPASSWD:ALL
+
+    - name: Habilita autenticacao SSH por senha
+      copy:
+        dest: /etc/ssh/sshd_config.d/00-4linux-password-auth.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          PasswordAuthentication yes
+      notify:
+        - Reinicia ssh
+
+    - name: Valida configuracao do SSH
+      command: /usr/sbin/sshd -t
+      changed_when: false
+
+    - name: Confirma autenticacao SSH por senha
+      command: /usr/sbin/sshd -T
+      register: sshd_effective_config
+      changed_when: false
+      failed_when: >
+        'passwordauthentication yes' not in sshd_effective_config.stdout_lines
+
+    - name: Cria o diretorio .ssh
       file:
         path: /home/suporte/.ssh
         state: directory
         owner: suporte
         group: suporte
-        mode: '0755'
-        
+        mode: '0700'
+
     - name: Criando o arquivo id_rsa
       copy:
         src: files/id_rsa
         dest: /home/suporte/.ssh/id_rsa
         owner: suporte
         group: suporte
-        mode: 0600
-        
+        mode: '0600'
+
     - name: Criando o arquivo id_rsa.pub
       copy:
         src: files/id_rsa.pub
         dest: /home/suporte/.ssh/id_rsa.pub
         owner: suporte
         group: suporte
-        mode: 0644
+        mode: '0644'
+
+    # -------------------------------------------------------------------------
+    # Certificado do Registry
+    # -------------------------------------------------------------------------
 
     - name: Criando o arquivo registry.crt
       copy:
@@ -50,89 +166,129 @@
         dest: /usr/local/share/ca-certificates/registry.crt
         owner: root
         group: root
-        mode: 0644
+        mode: '0644'
+      notify:
+        - Atualiza certificados
 
-    - name: Adicionando certificado registry.crt
-      shell: update-ca-certificates
+    - name: Aplica imediatamente os certificados
+      meta: flush_handlers
 
-    - name: Clona repositório com os arquivos do curso para a HOME do usuario suporte
-      git:
-        repo: 'https://github.com/4linux/545.git'
+    # -------------------------------------------------------------------------
+    # Arquivos do curso
+    # -------------------------------------------------------------------------
+
+    - name: Disponibiliza arquivos do curso atraves do diretorio compartilhado
+      file:
+        src: /vagrant
         dest: /home/suporte/545
+        state: link
+        owner: suporte
+        group: suporte
+        force: yes
 
-    - name: Remove swap do arquivo /etc/fstab
-      mount:
-        name: "{{ item }}"
-        fstype: swap
-        state: absent
-      with_items:
-        - swap
-        - none
+    # -------------------------------------------------------------------------
+    # Swap
+    # -------------------------------------------------------------------------
 
     - name: Desativa o swap
       command: swapoff -a
       when: ansible_swaptotal_mb > 0
 
-    - name: Cria o arquivo containerd.conf
-      file:
-        path: /etc/modules-load.d/containerd.conf
-        state: touch
-
-    - name: Configurando modulos
+    - name: Remove configuracoes de swap do /etc/fstab
       lineinfile:
-        path: /etc/modules-load.d/containerd.conf
-        line: "{{ item }}"
+        path: /etc/fstab
+        regexp: '^\s*[^#].*\s+swap\s+'
+        state: absent
+
+    - name: Remove o arquivo swap.img caso exista
+      file:
+        path: /swap.img
+        state: absent
+
+    # -------------------------------------------------------------------------
+    # Módulos do kernel
+    # -------------------------------------------------------------------------
+
+    - name: Configura modulos necessarios para o Containerd
+      copy:
+        dest: /etc/modules-load.d/containerd.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Carrega os modulos necessarios
+      command: "modprobe {{ item }}"
       with_items:
         - overlay
         - br_netfilter
+      changed_when: false
 
-    - name: Carregando modulos
-      shell: modprobe overlay && modprobe br_netfilter
+    # -------------------------------------------------------------------------
+    # Sysctl
+    # -------------------------------------------------------------------------
 
-    - name: Cria o arquivo dkubernetes.conf
-      file:
-        path: /etc/sysctl.d/kubernetes.conf
-        state: touch
+    - name: Configura parametros de rede do Kubernetes
+      copy:
+        dest: /etc/sysctl.d/kubernetes.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
 
-    - name: Configurando sysctl
-      lineinfile:
-        path: /etc/sysctl.d/kubernetes.conf
-        line: "{{ item }}"
-      with_items:
-        - net.bridge.bridge-nf-call-ip6tables = 1
-        - net.bridge.bridge-nf-call-iptables = 1
-        - net.ipv4.ip_forward = 1
+    - name: Aplica configuracoes sysctl
+      command: sysctl --system
+      changed_when: false
 
-    - name: Aplicando sysctl
-      shell: sysctl --system
+    # -------------------------------------------------------------------------
+    # Pacotes adicionais
+    # -------------------------------------------------------------------------
 
-    - name: Instala pacotes que permitem que o apt seja usado sobre HTTPS
+    - name: Instala pacotes adicionais
       apt:
-        name: "{{ packages }}"
+        name:
+          - apt-transport-https
+          - software-properties-common
+          - mysql-client
+          - nfs-common
+          - snapd
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Repositório Docker
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio de chaves APT
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Baixa chave GPG do repositorio Docker
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Adiciona repositorio oficial Docker
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
         state: present
         update_cache: yes
-      vars:
-        packages:
-        - apt-transport-https
-        - ca-certificates
-        - curl
-        - gnupg2
-        - software-properties-common
-        - mysql-client
-        - nfs-common
-        - snapd
-        - git
-        - vim
 
-    - name: Adiciona uma chave de assinatura apt para o Docker
-      apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
-
-    - name: Adiciona repositorio apt para versao estavel
-      apt_repository:
-        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
-        state: present
+    # -------------------------------------------------------------------------
+    # Containerd
+    # -------------------------------------------------------------------------
 
     - name: Instala o Containerd
       apt:
@@ -140,110 +296,405 @@
         state: present
         update_cache: yes
 
-    - name: Criar conf default do Containerd
-      shell: containerd config default | sudo tee /etc/containerd/config.toml >/dev/null 2>&1
+    - name: Cria diretorio de configuracao do Containerd
+      file:
+        path: /etc/containerd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
 
-    - name: Ativa o Systemd no arquivo config.toml
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
+    - name: Gera configuracao default do Containerd
+      command: containerd config default
+      register: containerd_default_config
+      changed_when: false
 
-    - name: Ativa o uso de plugins no arquivo config.toml
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: '^disabled_plugins ='
-        replace: '#disabled_plugins ='
+    - name: Configura Containerd para Kubernetes
+      copy:
+        dest: /etc/containerd/config.toml
+        owner: root
+        group: root
+        mode: '0644'
+        content: >-
+          {{
+            containerd_default_config.stdout
+            | regex_replace(
+                'SystemdCgroup = false',
+                'SystemdCgroup = true'
+              )
+          }}
+      notify:
+        - Reinicia containerd
 
-    - name: Reinicia o containerd
+    - name: Aplica configuracao do Containerd
+      meta: flush_handlers
+
+    - name: Garante que o Containerd esta habilitado
       service:
         name: containerd
-        state: restarted
+        state: started
+        enabled: yes          
 
-    - name: Criar diretório /etc/apt/keyrings para apt do Kubernetes
-      file:
-        path: /etc/apt/keyrings
-        state: directory
+    # -------------------------------------------------------------------------
+    # Repositório Kubernetes
+    # -------------------------------------------------------------------------
 
-    - name: Adicione o repositório apt do Kubernetes ao sources.list
-      lineinfile:
-        path: /etc/apt/sources.list.d/kubernetes.list
-        line: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
-        create: yes
-        state: present
+    - name: Baixa chave publica do repositorio Kubernetes
+      get_url:
+        url: "https://pkgs.k8s.io/core:/stable:/{{ kubernetes_minor }}/deb/Release.key"
+        dest: /tmp/kubernetes-release.key
+        owner: root
+        group: root
+        mode: '0644'
 
-    - name: Importar chave GPG para o sistema
-      shell: "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+    - name: Converte chave GPG do Kubernetes
+      command:
+        cmd: >
+          gpg --dearmor
+          -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          /tmp/kubernetes-release.key
       args:
-        warn: false
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-    - name: Instala os pacotes do Kubernetes
-      apt:
-        name: "{{ packages }}"
+    - name: Define permissao da chave GPG do Kubernetes
+      file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Adiciona repositorio Kubernetes
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ kubernetes_minor }}/deb/ /"
+        filename: kubernetes
         state: present
         update_cache: yes
-      vars:
-        packages:
+
+    # -------------------------------------------------------------------------
+    # Kubernetes
+    # -------------------------------------------------------------------------
+
+    - name: Instala kubelet kubeadm e kubectl
+      apt:
+        name:
+          - "kubelet={{ kubernetes_version }}"
+          - "kubeadm={{ kubernetes_version }}"
+          - "kubectl={{ kubernetes_version }}"
+        state: present
+        update_cache: yes
+        allow_downgrade: yes
+
+    - name: Mantem os pacotes Kubernetes na versao instalada
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      with_items:
         - kubelet
         - kubeadm
         - kubectl
 
-    - name: Inicializa o cluster Kubernetes atraves da ferramenta kubeadm
-      shell: kubeadm init --apiserver-advertise-address=172.16.1.100 --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=all > /opt/init_cluster
-      args:
-        creates: /opt/init_cluster
+    - name: Baixa o crictl
+      get_url:
+        url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        mode: '0644'
+
+    - name: Instala o crictl
+      unarchive:
+        src: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        dest: /usr/local/bin
+        remote_src: yes
+        creates: /usr/local/bin/crictl          
+
+    # -------------------------------------------------------------------------
+    # IP utilizado pelo kubelet
+    # -------------------------------------------------------------------------
+
+    - name: Configura IP utilizado pelo kubelet
+      copy:
+        dest: /etc/default/kubelet
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}
+      notify:
+        - Reinicia kubelet
+
+    - name: Habilita kubelet
+      service:
+        name: kubelet
+        enabled: yes
+
+    - name: Aplica configuracao do kubelet
+      meta: flush_handlers
+
+    - name: Verifica funcionamento do CRI do Containerd
+      command: >
+        crictl
+        --runtime-endpoint unix:///run/containerd/containerd.sock
+        info
+      changed_when: false
         
-    - name: Cria o diretório .kube para o usuário vagrant
+    # -------------------------------------------------------------------------
+    # Inicialização do Cluster
+    # -------------------------------------------------------------------------
+
+    - name: Inicializa o cluster Kubernetes
+      command: >
+        kubeadm init
+        --apiserver-advertise-address={{ node_ip }}
+        --pod-network-cidr=192.168.0.0/16
+      args:
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Salva saida do kubeadm init
+      copy:
+        content: "{{ kubeadm_init.stdout }}\n"
+        dest: /opt/init_cluster
+        owner: root
+        group: root
+        mode: '0644'
+      when: kubeadm_init.changed
+
+    # -------------------------------------------------------------------------
+    # Kubeconfig - vagrant
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio .kube para usuario vagrant
       file:
         path: /home/vagrant/.kube
         state: directory
-        mode: '0755'
+        owner: vagrant
+        group: vagrant
+        mode: '0700'
 
-    - name: Configura o kubeconfig para o usuario vagrant
+    - name: Configura kubeconfig para usuario vagrant
       copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/vagrant/.kube/config
         remote_src: yes
-
-    - name: Definir permissao de acesso ao arquivo config
-      file:
-        path: /home/vagrant/.kube/config
         owner: vagrant
         group: vagrant
-        mode: '0644'
+        mode: '0600'
 
-    - name: Cria o diretório .kube para o usuário suporte
+    # -------------------------------------------------------------------------
+    # Kubeconfig - suporte
+    # -------------------------------------------------------------------------
+
+    - name: Cria diretorio .kube para usuario suporte
       file:
         path: /home/suporte/.kube
         state: directory
         owner: suporte
         group: suporte
-        mode: '0755'
+        mode: '0700'
 
-    - name: Configura o kubeconfig para o usuario suporte
+    - name: Configura kubeconfig para usuario suporte
       copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/suporte/.kube/config
         remote_src: yes
-
-    - name: Definir permissao de acesso ao arquivo config
-      file:
-        path: /home/suporte/.kube/config
         owner: suporte
         group: suporte
-        mode: '0644'
+        mode: '0600'
 
-    - name: Instala a rede calico no cluster
-      become: false
-      command: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
+    # -------------------------------------------------------------------------
+    # Calico
+    # -------------------------------------------------------------------------
 
-    - name: Permite que o master execute Pods como Worker
-      become: false
-      command: kubectl taint nodes kube-master node-role.kubernetes.io/control-plane-
+    - name: Instala rede Calico
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        apply
+        -f
+        https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
+      register: calico_install
+      changed_when: >
+        'created' in calico_install.stdout or
+        'configured' in calico_install.stdout
 
-    - name: Gera o comando para o join de novos nodes
+    # -------------------------------------------------------------------------
+    # Permite Pods no Control Plane
+    # -------------------------------------------------------------------------
+
+    - name: Permite que o kube-master execute Pods
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        taint nodes kube-master
+        node-role.kubernetes.io/control-plane-
+      register: master_taint
+      failed_when:
+        - master_taint.rc != 0
+        - "'not found' not in master_taint.stderr"
+      changed_when: master_taint.rc == 0
+
+    # -------------------------------------------------------------------------
+    # Infraestrutura do curso
+    # -------------------------------------------------------------------------
+
+    - name: Aguarda o API Server responder
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        get nodes
+      register: kubernetes_api
+      retries: 30
+      delay: 5
+      until: kubernetes_api.rc == 0
+      changed_when: false
+
+    - name: Aguarda os Pods do kube-system ficarem prontos
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        wait
+        --for=condition=Ready
+        pod
+        --all
+        -n kube-system
+        --timeout=300s
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Helm
+    # -------------------------------------------------------------------------
+
+    - name: Instala Helm via Snap
+      command: snap install helm --classic
+      args:
+        creates: /snap/bin/helm
+
+    - name: Verifica versao do Helm
+      command: /snap/bin/helm version --short
+      register: helm_version
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # MetalLB
+    # -------------------------------------------------------------------------
+
+    - name: Adiciona repositorio Helm do MetalLB
+      command: >
+        /snap/bin/helm repo add
+        metallb
+        https://metallb.github.io/metallb
+        --force-update
+      changed_when: false
+
+    - name: Atualiza repositorios Helm
+      command: /snap/bin/helm repo update
+      changed_when: false
+
+    - name: Instala MetalLB
+      command: >
+        /snap/bin/helm upgrade
+        --install metallb
+        metallb/metallb
+        --version {{ metallb_chart_version }}
+        --namespace default
+        --wait
+        --timeout 5m
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: metallb_install
+      changed_when: >
+        'STATUS: deployed' in metallb_install.stdout or
+        'STATUS: upgraded' in metallb_install.stdout
+
+    - name: Aplica configuracao do pool de enderecos do MetalLB
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        apply
+        -f /vagrant/cks/infra-setup/metallb-config.yaml
+      register: metallb_config
+      changed_when: >
+        'created' in metallb_config.stdout or
+        'configured' in metallb_config.stdout
+
+    # -------------------------------------------------------------------------
+    # NGINX Ingress Controller
+    # -------------------------------------------------------------------------
+
+    - name: Instala NGINX Ingress Controller
+      command: >
+        /snap/bin/helm upgrade
+        --install nginx-ingress
+        oci://ghcr.io/nginx/charts/nginx-ingress
+        --version {{ nginx_ingress_chart_version }}
+        --namespace default
+        --wait
+        --timeout 5m
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: nginx_ingress_install
+      changed_when: >
+        'STATUS: deployed' in nginx_ingress_install.stdout or
+        'STATUS: upgraded' in nginx_ingress_install.stdout
+
+    # -------------------------------------------------------------------------
+    # Aplicacao PHP 4Linux
+    # -------------------------------------------------------------------------
+
+    - name: Realiza deploy da aplicacao PHP 4Linux
+      command: >
+        kubectl
+        --kubeconfig=/etc/kubernetes/admin.conf
+        apply
+        -f /vagrant/cks/infra-setup/recursos.yaml
+      register: app_4linux
+      changed_when: >
+        'created' in app_4linux.stdout or
+        'configured' in app_4linux.stdout
+
+    # Os Workers ainda podem nao ter entrado no Cluster neste ponto do
+    # provisionamento. Por isso nao aguardamos todos os Pods da aplicacao
+    # ficarem Ready aqui. Eles serao agendados normalmente apos o join.
+
+    - name: Adiciona frontend.4labs.example ao arquivo hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "172.16.1.201 frontend.4labs.example"
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Join dos Workers
+    # -------------------------------------------------------------------------
+
+    - name: Gera comando para adicionar novos nodes
       command: kubeadm token create --print-join-command
       register: join_command
+      changed_when: false
 
-    - name: Copia o comando do join no arquivo local
-      local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
+    - name: Grava comando de join no diretorio compartilhado pelo Vagrant
+      copy:
+        content: "{{ join_command.stdout }}\n"
+        dest: /vagrant/provision/ansible/join-command
+        mode: '0755'
+
+  handlers:
+
+    - name: Atualiza certificados
+      command: update-ca-certificates
+
+    - name: Reinicia ssh
+      service:
+        name: ssh
+        state: restarted
+        enabled: yes
+
+    - name: Reinicia containerd
+      service:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    - name: Reinicia kubelet
+      service:
+        name: kubelet
+        state: restarted
+        enabled: yes
