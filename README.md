@@ -25,10 +25,10 @@ Nesse laboratório, que está centralizado no arquivo [Vagrantfile][7], sera cri
 
 Nome       | vCPUs | Memoria RAM | IP            | S.O.¹           
 ---------- |:-----:|:-----------:|:-------------:|:---------------:
-kube-master     | 2     | 3584MB | 172.16.1.100 | ubuntu-18.04-amd64
-kube-node1      | 2     | 1536MB | 172.16.1.101 | ubuntu-18.04-amd64
-kube-node2      | 2     | 1536MB | 172.16.1.102 | ubuntu-18.04-amd64
-kube-registry      | 1     | 512MB | 172.16.1.103 | ubuntu-18.04-amd64 
+kube-master     | 2     | 4096MB | 172.16.1.100 | ubuntu-22.04-amd64
+kube-node1      | 2     | 3072MB | 172.16.1.101 | ubuntu-22.04-amd64
+kube-node2      | 2     | 3072MB | 172.16.1.102 | ubuntu-22.04-amd64
+kube-registry   | 1     | 512MB  | 172.16.1.103 | ubuntu-22.04-amd64 
 
 > **¹**: Esses Sistemas operacionais estão sendo utilizado no formato de Boxes, é a forma como o vagrant chama as imagens do sistema operacional utilizado.
 
